@@ -145,10 +145,6 @@ impl StatusArea {
         write!(screen, "{info}")?; // Print separator
         Ok(())
     }
-
-    fn height(&self) -> u16 {
-        self.status_lines.len() as u16
-    }
 }
 
 pub struct SplitScreen {
