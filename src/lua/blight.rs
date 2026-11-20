@@ -2,7 +2,10 @@ use super::{constants::*, regex::Regex, ui_event::UiEvent};
 use crate::event::{Event, QuitMethod, TabCommand};
 use crate::io::SaveData;
 use crate::tabs::{TabOpts, TabSet};
-use crate::ui::{TopPrefix, TopPrefixStyle, TopRowBody, TopRowOpts, TopRowSelector};
+use crate::ui::{
+    parse_bar_color, set_bar_color, TopPrefix, TopPrefixStyle, TopRowBody, TopRowOpts,
+    TopRowSelector,
+};
 use crate::{
     model::{self, Line, TagMask},
     tools::printable_chars::PrintableCharsIterator,
@@ -232,6 +235,28 @@ impl UserData for Blight {
             let this_aux = ctx.globals().get::<AnyUserData>("blight")?;
             let this = this_aux.borrow::<Blight>()?;
             Ok(this.reader_mode)
+        });
+        methods.add_function("bar_color", |ctx, value: mlua::Value| {
+            let spec = match value {
+                mlua::Value::Nil => None,
+                mlua::Value::Integer(n) => {
+                    parse_bar_color(&n.to_string()).map_err(mlua::Error::RuntimeError)?
+                }
+                mlua::Value::String(s) => {
+                    parse_bar_color(&s.to_str()?).map_err(mlua::Error::RuntimeError)?
+                }
+                other => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "bar_color: expected a number, string or nil, got {}",
+                        other.type_name()
+                    )))
+                }
+            };
+            set_bar_color(spec);
+            let this_aux = ctx.globals().get::<AnyUserData>("blight")?;
+            let this = this_aux.borrow::<Blight>()?;
+            this.main_writer.send(Event::Redraw).unwrap();
+            Ok(())
         });
         methods.add_function("status_height", |ctx, requested: Option<u16>| {
             let height: u16 = if let Some(height) = requested {
@@ -918,6 +943,18 @@ mod test_blight {
             .call::<bool>(())
             .unwrap();
         assert!(!val);
+    }
+
+    #[test]
+    fn test_bar_color() {
+        let (lua, _reader) = get_lua_state();
+        assert!(lua.load("blight.bar_color(240)").exec().is_ok());
+        assert!(lua.load("blight.bar_color('#585858')").exec().is_ok());
+        assert!(lua.load("blight.bar_color('bright_blue')").exec().is_ok());
+        assert!(lua.load("blight.bar_color()").exec().is_ok());
+        assert!(lua.load("blight.bar_color(256)").exec().is_err());
+        assert!(lua.load("blight.bar_color('nope')").exec().is_err());
+        assert!(lua.load("blight.bar_color({})").exec().is_err());
     }
 
     #[test]

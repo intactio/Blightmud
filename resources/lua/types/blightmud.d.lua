@@ -265,6 +265,10 @@ function BlightLib.is_core_mode() end
 ---@return boolean
 function BlightLib.is_reader_mode() end
 
+---Sets the bar color (status area bars, top rows, tab indicator).
+---@param color? integer|string  256-color index, "#rrggbb" or a color name. nil or "default" restores green.
+function BlightLib.bar_color(color) end
+
 ---Gets or sets the status bar height. Returns the requested height.
 ---@param height? integer  Up to 5 always applies; taller heights are limited to keep 10 output lines.
 ---@return integer

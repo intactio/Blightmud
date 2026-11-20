@@ -1,7 +1,75 @@
 use anyhow::Result;
 use std::collections::HashSet;
+use std::fmt;
 use std::io::Write;
+use std::sync::atomic::{AtomicU32, Ordering};
 use termion::color::{self, Bg, Fg};
+
+// Bar color shared by the status area bars, top rows and the tab indicator.
+// 0 = default (green), BAR_ANSI | n = 256-color index n, BAR_RGB | 0xrrggbb.
+const BAR_ANSI: u32 = 0x0100_0000;
+const BAR_RGB: u32 = 0x0200_0000;
+static BAR_COLOR: AtomicU32 = AtomicU32::new(0);
+
+/// Sets the bar color. `None` restores the default green.
+pub fn set_bar_color(spec: Option<u32>) {
+    BAR_COLOR.store(spec.unwrap_or(0), Ordering::Relaxed);
+}
+
+/// Parses a bar color: a 256-color index (0-255), `#rrggbb` or a color name
+/// (`black`, `red`, ... `white`, `bright_red`, ... `bright_white`, `grey`).
+/// `default` restores the default green (returns `None`).
+pub fn parse_bar_color(spec: &str) -> Result<Option<u32>, String> {
+    const NAMES: [&str; 8] = [
+        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+    ];
+    let spec = spec.trim().to_lowercase();
+    if spec == "default" {
+        return Ok(None);
+    }
+    if let Some(hex) = spec.strip_prefix('#') {
+        if hex.len() == 6 {
+            if let Ok(rgb) = u32::from_str_radix(hex, 16) {
+                return Ok(Some(BAR_RGB | rgb));
+            }
+        }
+        return Err(format!("invalid color '{spec}', expected #rrggbb"));
+    }
+    if let Ok(n) = spec.parse::<u32>() {
+        if n <= 255 {
+            return Ok(Some(BAR_ANSI | n));
+        }
+        return Err(format!("invalid color '{spec}', expected 0-255"));
+    }
+    if spec == "grey" || spec == "gray" {
+        return Ok(Some(BAR_ANSI | 8));
+    }
+    let (bright, name) = match spec.strip_prefix("bright_") {
+        Some(rest) => (true, rest),
+        None => (false, spec.as_str()),
+    };
+    match NAMES.iter().position(|n| *n == name) {
+        Some(i) => Ok(Some(BAR_ANSI | (i as u32 + if bright { 8 } else { 0 }))),
+        None => Err(format!("unknown color '{spec}'")),
+    }
+}
+
+/// Foreground escape for the current bar color.
+struct BarFg;
+
+impl fmt::Display for BarFg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = BAR_COLOR.load(Ordering::Relaxed);
+        if value & BAR_RGB != 0 {
+            let (r, g, b) = ((value >> 16) as u8, (value >> 8) as u8, value as u8);
+            write!(f, "{}", Fg(color::Rgb(r, g, b)))
+        } else if value & BAR_ANSI != 0 {
+            write!(f, "{}", Fg(color::AnsiValue(value as u8)))
+        } else {
+            write!(f, "{}", Fg(color::Green))
+        }
+    }
+}
 
 use crate::tabs::TabInfo;
 use crate::tools::printable_chars::PrintableCharsIterator;
@@ -312,7 +380,7 @@ pub(crate) fn draw_bar(
         "{}{}{}",
         termion::cursor::Goto(1, line as u16),
         termion::clear::CurrentLine,
-        Fg(color::Green),
+        BarFg,
     )?;
 
     let trimmed = custom_info.trim();
@@ -324,7 +392,7 @@ pub(crate) fn draw_bar(
             trimmed.get(0..max_bytes).unwrap_or(trimmed),
             Bg(color::Reset),
             Fg(color::Reset),
-            Fg(color::Green)
+            BarFg
         )
     } else {
         String::new()
@@ -366,7 +434,7 @@ pub fn format_tabs_segment(tabs: &[TabInfo]) -> (String, usize) {
     let sep = " \u{2502} "; // " │ "
     for (i, tab) in tabs.iter().enumerate() {
         if i > 0 {
-            tabs_styled.push_str(&format!("{}{}{}", Fg(color::Green), sep, Fg(color::Reset)));
+            tabs_styled.push_str(&format!("{}{}{}", BarFg, sep, Fg(color::Reset)));
             tabs_visible_width += sep.display_width();
         }
         let body = if let Some(sc) = tab.shortcut.as_ref() {
@@ -411,13 +479,7 @@ fn render_prefix(prefix: &Option<TopPrefix>, bar_char: char) -> (String, usize) 
             // `═══ {text} ` — text with a leading triple-bar and trailing space.
             let lead = repeat_char(bar_char, 3);
             let visible = 3 + p.text.as_str().display_width() + 1;
-            let styled = format!(
-                "{}{}{}{} ",
-                Fg(color::Green),
-                lead,
-                p.text,
-                Fg(color::Reset)
-            );
+            let styled = format!("{}{}{}{} ", BarFg, lead, p.text, Fg(color::Reset));
             (styled, visible)
         }
         TopPrefixStyle::Brand => {
@@ -427,14 +489,14 @@ fn render_prefix(prefix: &Option<TopPrefix>, bar_char: char) -> (String, usize) 
             let visible = 3 + p.text.as_str().display_width() + 2 + 1;
             let styled = format!(
                 "{}{}{}{}{}{}{}{}{}{} ",
-                Fg(color::Green),
+                BarFg,
                 lead,
                 termion::style::Bold,
                 Fg(color::LightWhite),
                 p.text,
                 Fg(color::Reset),
                 termion::style::Reset,
-                Fg(color::Green),
+                BarFg,
                 trail,
                 Fg(color::Reset),
             );
@@ -491,7 +553,7 @@ pub fn render_row(
         "{}{}{}",
         termion::cursor::Goto(1, line),
         termion::clear::CurrentLine,
-        Fg(color::Green),
+        BarFg,
     )?;
 
     let (prefix_styled, prefix_visible_width) = render_prefix(&row.prefix, row.bar_char);
@@ -522,7 +584,7 @@ pub fn render_row(
             "{} {}{}{}",
             body_styled,
             Fg(color::Reset),
-            Fg(color::Green),
+            BarFg,
             trail,
         )?;
     } else {
@@ -539,7 +601,7 @@ pub fn render_row(
                 visible_text,
                 Bg(color::Reset),
                 Fg(color::Reset),
-                Fg(color::Green),
+                BarFg,
             )
         } else {
             String::new()
@@ -1038,5 +1100,28 @@ mod tests {
         // <2 tabs → format_tabs_segment returns ("", 0) → empty body → bar fill.
         let out = render_to_string(&row, &ctx(10, None, &tags, &tabs));
         assert_eq!(out, "══════════");
+    }
+}
+
+#[cfg(test)]
+mod bar_color_tests {
+    use super::{parse_bar_color, BAR_ANSI, BAR_RGB};
+
+    #[test]
+    fn parses_index_hex_and_names() {
+        assert_eq!(parse_bar_color("240"), Ok(Some(BAR_ANSI | 240)));
+        assert_eq!(parse_bar_color("#585858"), Ok(Some(BAR_RGB | 0x585858)));
+        assert_eq!(parse_bar_color("red"), Ok(Some(BAR_ANSI | 1)));
+        assert_eq!(parse_bar_color("Bright_Blue"), Ok(Some(BAR_ANSI | 12)));
+        assert_eq!(parse_bar_color("grey"), Ok(Some(BAR_ANSI | 8)));
+        assert_eq!(parse_bar_color("default"), Ok(None));
+    }
+
+    #[test]
+    fn rejects_invalid() {
+        assert!(parse_bar_color("256").is_err());
+        assert!(parse_bar_color("#12345").is_err());
+        assert!(parse_bar_color("#gggggg").is_err());
+        assert!(parse_bar_color("purple").is_err());
     }
 }
