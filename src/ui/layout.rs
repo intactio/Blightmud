@@ -34,7 +34,7 @@ pub const MIN_OUTPUT_ROWS: u16 = 2;
 /// An input area is never zero rows — there would be nowhere to type.
 pub const INPUT_HEIGHT_MIN: u16 = 1;
 
-/// Upper bound on a user-requested input height, mirroring `STATUS_HEIGHT_MAX`.
+/// Upper bound on a user-requested input height.
 pub const INPUT_HEIGHT_MAX: u16 = 10;
 
 /// Absolute, 1-based terminal row numbers for each region boundary.

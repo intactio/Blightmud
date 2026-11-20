@@ -9,7 +9,9 @@ Set or get the status area height. The first and last row will always be
 rendered as bars. But you can still print to these bars. Setting the height to
 0 will hide the status area.
 
-- `height`  The height to set (0 <= height <= 5) *Optional*
+- `height`  The height to set (0 or more) *Optional*. Heights up to 5 always
+            apply. Taller status areas are limited so that at least 10 lines
+            remain for MUD output; the limit follows terminal resizes.
 - Returns the current status area height
 
 ***blight.status_line(index, line)***

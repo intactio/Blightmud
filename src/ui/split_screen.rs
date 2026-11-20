@@ -26,8 +26,22 @@ use super::UserInterface;
 
 const SCROLL_LIVE_BUFFER_SIZE: u16 = 10;
 const PROMPT_HEIGHT: u16 = 1;
-const STATUS_HEIGHT_MIN: u16 = 0;
-const STATUS_HEIGHT_MAX: u16 = 5;
+/// Status area heights up to this are always honored (the historical maximum).
+const STATUS_HEIGHT_ALWAYS_ALLOWED: u16 = 5;
+/// Taller status areas are allowed as long as this many output lines remain.
+const MIN_OUTPUT_LINES: u16 = 10;
+
+/// Largest status area height that fits a terminal of `term_height` rows with
+/// `top_rows` visible top rows, keeping at least `MIN_OUTPUT_LINES` of output.
+/// Never lower than `STATUS_HEIGHT_ALWAYS_ALLOWED`, so existing scripts behave
+/// as before on small terminals.
+fn status_height_limit(term_height: u16, top_rows: u16) -> u16 {
+    // Rows outside the status area: top rows, output, MUD prompt line, input line.
+    let reserved = top_rows + MIN_OUTPUT_LINES + 1 + PROMPT_HEIGHT;
+    term_height
+        .saturating_sub(reserved)
+        .max(STATUS_HEIGHT_ALWAYS_ALLOWED)
+}
 
 struct StatusArea {
     start_line: u16,
@@ -38,11 +52,10 @@ struct StatusArea {
 
 impl StatusArea {
     fn new(height: u16, start_line: u16, width: u16) -> Self {
-        let height = Self::clamp_height(height);
         Self {
             start_line,
             width,
-            status_lines: vec![None; height],
+            status_lines: vec![None; height as usize],
             scroll_marker: false,
         }
     }
@@ -51,18 +64,19 @@ impl StatusArea {
         self.scroll_marker = value;
     }
 
-    fn clamp_height(height: u16) -> usize {
-        height.clamp(STATUS_HEIGHT_MIN, STATUS_HEIGHT_MAX) as usize
-    }
-
     fn clamp_index(&self, index: usize) -> usize {
         index.clamp(0, self.status_lines.len() - 1)
     }
 
     fn set_height(&mut self, height: u16, start_line: u16) {
         self.clear();
-        self.status_lines.resize(Self::clamp_height(height), None);
+        self.status_lines.resize(height as usize, None);
         self.update_pos(start_line);
+    }
+
+    /// Changes the number of lines while keeping the existing line contents.
+    fn resize(&mut self, height: u16) {
+        self.status_lines.resize(height as usize, None);
     }
 
     fn update_pos(&mut self, start_line: u16) {
@@ -139,6 +153,9 @@ impl StatusArea {
 
 pub struct SplitScreen {
     screen: Box<dyn Write>,
+    /// Status area height requested by scripts. The drawn height may be lower
+    /// when the terminal is too small (see `status_height_limit`).
+    status_area_requested: u16,
     width: u16,
     height: u16,
     output_start_line: u16,
@@ -228,13 +245,14 @@ impl UserInterface for SplitScreen {
             }
             // The top area's height is only known once the rows above have
             // been reconciled, and it is an input to every other boundary.
-            let layout = ScreenLayout::compute(
-                height,
-                self.top_area.visible_row_count(),
-                self.status_area.height(),
-                INPUT_HEIGHT_MIN,
-            )
-            .ok_or(TerminalSizeError)?;
+            // Fit the requested status area into the (possibly resized)
+            // terminal, keeping room for the output.
+            let top_rows = self.top_area.visible_row_count();
+            let status_request = self
+                .status_area_requested
+                .min(status_height_limit(height, top_rows));
+            let layout = ScreenLayout::compute(height, top_rows, status_request, INPUT_HEIGHT_MIN)
+                .ok_or(TerminalSizeError)?;
 
             self.output_start_line = layout.output_start_line;
             self.output_line = layout.output_line;
@@ -242,13 +260,11 @@ impl UserInterface for SplitScreen {
             self.prompt_line = layout.input_start_line;
 
             // The layout may have taken rows away from the status area to keep
-            // the output region renderable.
-            if layout.status_height != self.status_area.height() {
-                self.status_area
-                    .set_height(layout.status_height, self.mud_prompt_line + 1);
-            } else {
-                self.status_area.update_pos(self.mud_prompt_line + 1);
-            }
+            // the output region renderable. The requested height is kept, so
+            // growing the terminal again restores it, and so are the line
+            // contents.
+            self.status_area.resize(layout.status_height);
+            self.status_area.update_pos(self.mud_prompt_line + 1);
 
             write!(
                 self.screen,
@@ -602,7 +618,11 @@ impl UserInterface for SplitScreen {
     }
 
     fn set_status_area_height(&mut self, height: u16) -> Result<()> {
-        let height = StatusArea::clamp_height(height) as u16;
+        self.status_area_requested = height;
+        let height = height.min(status_height_limit(
+            self.height,
+            self.top_area.visible_row_count(),
+        ));
         self.status_area
             .set_height(height, self.height - height - PROMPT_HEIGHT);
         self.setup()?;
@@ -764,6 +784,7 @@ impl SplitScreen {
 
         Ok(Self {
             screen,
+            status_area_requested: status_area_height,
             width,
             height,
             output_start_line: layout.output_start_line,
@@ -1020,6 +1041,24 @@ impl SplitScreen {
 }
 
 #[cfg(test)]
+mod status_height_limit_test {
+    use super::status_height_limit;
+
+    #[test]
+    fn small_terminals_keep_old_maximum() {
+        assert_eq!(status_height_limit(10, 1), 5);
+        assert_eq!(status_height_limit(0, 0), 5);
+    }
+
+    #[test]
+    fn tall_terminals_allow_more() {
+        // 40 rows - 2 top rows - 10 output - MUD prompt - input line
+        assert_eq!(status_height_limit(40, 2), 26);
+        assert_eq!(status_height_limit(24, 1), 11);
+    }
+}
+
+#[cfg(test)]
 mod screen_test {
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -1228,6 +1267,7 @@ mod screen_test {
         let layout = ScreenLayout::compute(height, 2, 1, input_height).unwrap();
         let screen = SplitScreen {
             screen: Box::new(SharedBuf(sink.clone())),
+            status_area_requested: 1,
             width,
             height,
             output_start_line: layout.output_start_line,
