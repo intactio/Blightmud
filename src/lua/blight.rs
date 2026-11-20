@@ -235,7 +235,6 @@ impl UserData for Blight {
         });
         methods.add_function("status_height", |ctx, requested: Option<u16>| {
             let height: u16 = if let Some(height) = requested {
-                let height = height.clamp(0, 5);
                 let this_aux = ctx.globals().get::<AnyUserData>("blight")?;
                 let this = this_aux.borrow::<Blight>()?;
                 this.main_writer
@@ -939,6 +938,11 @@ mod test_blight {
             .call::<u16>(())
             .unwrap();
         assert_eq!(height, 3);
+        let height = lua
+            .load("return blight.status_height(12)")
+            .call::<u16>(())
+            .unwrap();
+        assert_eq!(height, 12);
         let height = lua
             .load("return blight.status_height(1)")
             .call::<u16>(())

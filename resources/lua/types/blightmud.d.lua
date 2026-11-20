@@ -265,8 +265,8 @@ function BlightLib.is_core_mode() end
 ---@return boolean
 function BlightLib.is_reader_mode() end
 
----Gets or sets the status bar height (0–5 lines). Returns the current height.
----@param height? integer  Clamped to 0–5.
+---Gets or sets the status bar height. Returns the requested height.
+---@param height? integer  Up to 5 always applies; taller heights are limited to keep 10 output lines.
 ---@return integer
 function BlightLib.status_height(height) end
 
